@@ -1,3 +1,5 @@
+import { supabase } from './supabase'
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api').replace(/\/$/, '')
 
 export type ApiError = Error & { status?: number }
@@ -31,17 +33,18 @@ export type BasketLine = {
   optionValue?: string
 }
 export type Basket = { items: BasketLine[]; subtotalMinor: number; currency: string }
-export type Customer = { id: number; email: string; firstName: string; lastName: string; role?: string }
-export type AuthResult = { token: string; expiresAt: string; customer: Customer }
-
-export const getToken = () => sessionStorage.getItem('boutique-beauty-retail-session-token')
-export const saveToken = (token: string | null) => token ? sessionStorage.setItem('boutique-beauty-retail-session-token', token) : sessionStorage.removeItem('boutique-beauty-retail-session-token')
+export type Customer = { id: number | string; email: string; firstName: string; lastName: string; role?: string }
 
 async function request<T>(path: string, init: RequestInit = {}, authenticated = false): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body) headers.set('Content-Type', 'application/json')
-  const token = getToken()
-  if (authenticated && token) headers.set('Authorization', `Bearer ${token}`)
+  if (authenticated) {
+    if (!supabase) throw Object.assign(new Error('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.'), { status: 0 }) as ApiError
+    const { data: { session }, error } = await supabase.auth.getSession()
+    if (error) throw Object.assign(new Error(error.message), { status: 0 }) as ApiError
+    if (!session?.access_token) throw Object.assign(new Error('Sign in to your Boutique Beauty Retail account to continue.'), { status: 401 }) as ApiError
+    headers.set('Authorization', `Bearer ${session.access_token}`)
+  }
   let response: Response
   try {
     response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
@@ -54,6 +57,8 @@ async function request<T>(path: string, init: RequestInit = {}, authenticated = 
       const body = await response.json() as { message?: string; error?: string }
       message = body.message || body.error || message
     } catch { /* response had no JSON error body */ }
+    if (response.status === 401) message = 'Your sign-in session is missing or has expired. Sign in again to continue.'
+    if (response.status === 403) message = 'You are signed in, but your account does not have permission for this action.'
     throw Object.assign(new Error(message), { status: response.status }) as ApiError
   }
   if (response.status === 204) return undefined as T
@@ -68,9 +73,6 @@ export const api = {
     if (params.category) query.set('category', params.category)
     return request<ProductPage>(`/catalog/products?${query}`, { signal })
   },
-  login: (email: string, password: string) => request<AuthResult>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  register: (body: { firstName: string; lastName: string; email: string; password: string }) => request<AuthResult>('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
-  logout: () => request<void>('/auth/logout', { method: 'POST' }, true),
   me: () => request<Customer>('/account/me', {}, true),
   basket: () => request<Basket>('/basket', {}, true),
   putBasketLine: (variantId: number, quantity: number) => request<Basket>('/basket/lines', { method: 'PUT', body: JSON.stringify({ variantId, quantity }) }, true),

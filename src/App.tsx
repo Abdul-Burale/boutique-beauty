@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ArrowRight, ChevronDown, Heart, Menu, Search, ShoppingBag, SlidersHorizontal, UserRound, X } from 'lucide-react'
-import { api, type Basket, type Category, type Customer, type Product, getToken, saveToken } from './lib/api'
+import type { User } from '@supabase/supabase-js'
+import { api, type Basket, type Category, type Customer, type Product } from './lib/api'
+import { supabase } from './lib/supabase'
 
 const fallbackImages = [
   'photo-1608248543803-ba4f8c70ae0b', 'photo-1601049541289-9b1b7bbbfe19', 'photo-1556229010-6c3f2c9ca5f8',
@@ -10,6 +12,12 @@ const fallbackImages = [
 const imageUrl = (image: string | null, index: number) => image || `https://images.unsplash.com/${fallbackImages[index % fallbackImages.length]}?auto=format&fit=crop&w=900&q=85`
 const money = (minor: number) => new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(minor / 100)
 const sorts = [{ label: 'Featured', value: 'featured' }, { label: 'Price: low to high', value: 'price_asc' }, { label: 'Price: high to low', value: 'price_desc' }, { label: 'Name: A to Z', value: 'name_asc' }]
+const customerFromAuthUser = (user: User): Customer => ({
+  id: user.id,
+  email: user.email || '',
+  firstName: typeof user.user_metadata.first_name === 'string' ? user.user_metadata.first_name : user.email?.split('@')[0] || 'there',
+  lastName: typeof user.user_metadata.last_name === 'string' ? user.user_metadata.last_name : '',
+})
 
 function App() {
   const [categories, setCategories] = useState<Category[]>([])
@@ -31,6 +39,8 @@ function App() {
   const [basketError, setBasketError] = useState('')
   const [authOpen, setAuthOpen] = useState(false)
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [authMessage, setAuthMessage] = useState('')
+  const [authMessageIsError, setAuthMessageIsError] = useState(true)
   const [bagOpen, setBagOpen] = useState(false)
   const [mobileMenu, setMobileMenu] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
@@ -70,12 +80,39 @@ function App() {
     finally { setBasketLoading(false) }
   }
 
+  const loadCustomerData = async (user: User) => {
+    setCustomer(customerFromAuthUser(user))
+    setBasketLoading(true)
+    setBasketError('')
+    try {
+      const profile = await api.me()
+      setCustomer(profile)
+      setBasket(await api.basket())
+    } catch (error) {
+      setBasketError((error as Error).message)
+    } finally { setBasketLoading(false) }
+  }
+
   useEffect(() => {
-    const token = getToken()
-    if (!token) return
-    api.me().then((profile) => { setCustomer(profile); return api.basket() })
-      .then(setBasket)
-      .catch(() => { saveToken(null); setCustomer(null); setBasket({ items: [], subtotalMinor: 0, currency: 'GBP' }) })
+    if (!supabase) return
+    let active = true
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (!active) return
+      if (error) { setAuthMessage(error.message); return }
+      if (data.session?.user) void loadCustomerData(data.session.user)
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT' || !session) {
+        setCustomer(null)
+        setBasket({ items: [], subtotalMinor: 0, currency: 'GBP' })
+        return
+      }
+      if (event === 'SIGNED_IN' && session.user) {
+        // Defer API calls until after the Supabase auth callback releases its lock.
+        window.setTimeout(() => { if (active) void loadCustomerData(session.user) }, 0)
+      }
+    })
+    return () => { active = false; subscription.unsubscribe() }
   }, [])
 
   const selectedCategory = useMemo(() => categories.find((item) => item.slug === category), [categories, category])
@@ -104,22 +141,46 @@ function App() {
   }
 
   const handleAuth = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); setAuthBusy(true)
+    event.preventDefault(); setAuthBusy(true); setAuthMessage(''); setAuthMessageIsError(true)
+    if (!supabase) { setAuthMessage('Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env.local, then restart the frontend.'); setAuthBusy(false); return }
     const form = new FormData(event.currentTarget)
     try {
-      const result = authMode === 'login'
-        ? await api.login(String(form.get('email')), String(form.get('password')))
-        : await api.register({ firstName: String(form.get('firstName')), lastName: String(form.get('lastName')), email: String(form.get('email')), password: String(form.get('password')) })
-      saveToken(result.token); setCustomer(result.customer); setAuthOpen(false); showNotice(`Welcome${result.customer.firstName ? `, ${result.customer.firstName}` : ''}!`)
-      setBasketLoading(true); setBasketError('')
-      try { setBasket(await api.basket()) } catch (error) { setBasketError((error as Error).message) } finally { setBasketLoading(false) }
-    } catch (error) { showNotice((error as Error).message, true) }
+      const email = String(form.get('email'))
+      const password = String(form.get('password'))
+      if (authMode === 'login') {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+        if (error) throw error
+        if (!data.user || !data.session) throw new Error('Sign-in succeeded without an active session. Try again.')
+        setCustomer(customerFromAuthUser(data.user)); setAuthOpen(false); showNotice(`Welcome${data.user.user_metadata.first_name ? `, ${data.user.user_metadata.first_name}` : ''}!`)
+        await loadCustomerData(data.user)
+      } else {
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { first_name: String(form.get('firstName')).trim(), last_name: String(form.get('lastName')).trim() },
+            emailRedirectTo: window.location.origin,
+          },
+        })
+        if (error) throw error
+        if (data.session && data.user) {
+          setCustomer(customerFromAuthUser(data.user)); setAuthOpen(false); showNotice(`Welcome${data.user.user_metadata.first_name ? `, ${data.user.user_metadata.first_name}` : ''}!`)
+          await loadCustomerData(data.user)
+        } else {
+          setAuthMessageIsError(false)
+          setAuthMessage('Your account was created. Check your email to confirm it, then sign in.')
+        }
+      }
+    } catch (error) { setAuthMessage((error as Error).message) }
     finally { setAuthBusy(false) }
   }
 
   const logout = async () => {
-    try { await api.logout() } catch { /* clear the local session even when the service is unavailable */ }
-    saveToken(null); setCustomer(null); setBasket({ items: [], subtotalMinor: 0, currency: 'GBP' }); setAuthOpen(false); showNotice('You are signed out')
+    if (supabase) {
+      const { error } = await supabase.auth.signOut({ scope: 'local' })
+      if (error) { showNotice(error.message, true); return }
+    }
+    setCustomer(null); setBasket({ items: [], subtotalMinor: 0, currency: 'GBP' }); setAuthOpen(false); showNotice('You are signed out')
   }
 
   const submitNewsletter = async (event: FormEvent<HTMLFormElement>) => {
@@ -166,7 +227,7 @@ function App() {
 
       <footer className="bg-[#f7f2eb] px-5 py-10 sm:px-10"><div className="mx-auto grid max-w-[1280px] gap-9 sm:grid-cols-2 lg:grid-cols-4"><div><span className="font-display text-2xl tracking-[.12em]">BOUTIQUE</span><span className="ml-2 text-[9px] uppercase tracking-[.24em] text-[#8f6559]">Beauty Retail</span><p className="mt-3 max-w-xs text-xs leading-5 text-stone-600">Beauty for the everyday. A considered collection of things that make you feel a little more like you.</p></div>{[['Explore', 'New in', 'Skincare', 'Makeup', 'Bath & body'], ['Here to help', 'Contact us', 'Delivery & returns', 'FAQs', 'Find your order'], ['Find us', 'Instagram', 'TikTok', 'Pinterest', 'Our journal']].map(([title, ...links]) => <div key={title}><h3 className="text-[10px] uppercase tracking-[.18em]">{title}</h3><ul className="mt-4 space-y-3">{links.map((link) => <li key={link}><a href="#products" className="text-xs text-stone-600 hover:text-ink">{link}</a></li>)}</ul></div>)}</div><div className="mx-auto mt-10 max-w-[1280px] border-t border-stone-300 pt-5 text-[9px] uppercase tracking-[.12em] text-stone-500">© 2026 Boutique Beauty Retail · boutiquebeautyretail.com</div></footer>
 
-      {authOpen && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setAuthOpen(false) }}><section role="dialog" aria-modal="true" aria-labelledby="auth-title" className="relative w-full max-w-md bg-[#fffdfa] p-6 shadow-xl sm:p-9"><button onClick={() => setAuthOpen(false)} aria-label="Close account dialog" className="absolute right-4 top-4 p-2"><X size={19} /></button>{customer ? <><p className="text-[10px] uppercase tracking-[.18em] text-[#a45f50]">Your account</p><h2 id="auth-title" className="mt-2 font-display text-3xl">Hello, {customer.firstName}</h2><p className="mt-3 text-sm text-stone-600">{customer.email}</p><button onClick={() => void logout()} className="mt-7 w-full bg-[#293c35] py-3 text-xs uppercase tracking-[.15em] text-white">Sign out</button></> : <><p className="text-[10px] uppercase tracking-[.18em] text-[#a45f50]">Welcome to Boutique Beauty Retail</p><h2 id="auth-title" className="mt-2 font-display text-3xl">{authMode === 'login' ? 'Good to see you.' : 'Let’s get acquainted.'}</h2><p className="mt-2 text-sm text-stone-600">{authMode === 'login' ? 'Sign in to see your bag and keep your favourites close.' : 'Create an account to start building your beauty routine.'}</p><form onSubmit={handleAuth} className="mt-6 space-y-4">{authMode === 'register' && <div className="grid grid-cols-2 gap-3"><input required name="firstName" autoComplete="given-name" placeholder="First name" maxLength={80} className="w-full border border-stone-300 px-3 py-3 text-sm outline-none focus:border-ink" /><input required name="lastName" autoComplete="family-name" placeholder="Last name" maxLength={80} className="w-full border border-stone-300 px-3 py-3 text-sm outline-none focus:border-ink" /></div>}<input required type="email" name="email" autoComplete="email" placeholder="Email address" maxLength={254} className="w-full border border-stone-300 px-3 py-3 text-sm outline-none focus:border-ink" /><input required type="password" name="password" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} placeholder="Password" minLength={authMode === 'register' ? 12 : undefined} maxLength={72} className="w-full border border-stone-300 px-3 py-3 text-sm outline-none focus:border-ink" />{authMode === 'register' && <p className="text-[11px] leading-5 text-stone-500">Please use at least 12 characters for your password.</p>}<button disabled={authBusy} className="w-full bg-[#293c35] py-3.5 text-xs uppercase tracking-[.15em] text-white disabled:opacity-60">{authBusy ? 'Please wait…' : authMode === 'login' ? 'Sign in' : 'Create account'}</button></form><p className="mt-5 text-center text-xs text-stone-600">{authMode === 'login' ? 'New here?' : 'Already have an account?'} <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="underline underline-offset-4">{authMode === 'login' ? 'Create an account' : 'Sign in'}</button></p></>}</section></div>}
+      {authOpen && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setAuthOpen(false) }}><section role="dialog" aria-modal="true" aria-labelledby="auth-title" className="relative w-full max-w-md bg-[#fffdfa] p-6 shadow-xl sm:p-9"><button onClick={() => setAuthOpen(false)} aria-label="Close account dialog" className="absolute right-4 top-4 p-2"><X size={19} /></button>{customer ? <><p className="text-[10px] uppercase tracking-[.18em] text-[#a45f50]">Your account</p><h2 id="auth-title" className="mt-2 font-display text-3xl">Hello, {customer.firstName}</h2><p className="mt-3 text-sm text-stone-600">{customer.email}</p><button onClick={() => void logout()} className="mt-7 w-full bg-[#293c35] py-3 text-xs uppercase tracking-[.15em] text-white">Sign out</button></> : <><p className="text-[10px] uppercase tracking-[.18em] text-[#a45f50]">Welcome to Boutique Beauty Retail</p><h2 id="auth-title" className="mt-2 font-display text-3xl">{authMode === 'login' ? 'Good to see you.' : 'Let’s get acquainted.'}</h2><p className="mt-2 text-sm text-stone-600">{authMode === 'login' ? 'Sign in to see your bag and keep your favourites close.' : 'Create an account to start building your beauty routine.'}</p>{authMessage && <p role={authMessageIsError ? 'alert' : 'status'} className={`mt-4 border px-3 py-2 text-xs leading-5 ${authMessageIsError ? 'border-[#d9aaa0] bg-[#fbf1ee] text-[#8c443b]' : 'border-[#b8c8be] bg-[#edf4ef] text-[#355444]'}`}>{authMessage}</p>}<form onSubmit={handleAuth} className="mt-6 space-y-4">{authMode === 'register' && <div className="grid grid-cols-2 gap-3"><input required name="firstName" autoComplete="given-name" placeholder="First name" maxLength={80} className="w-full border border-stone-300 px-3 py-3 text-sm outline-none focus:border-ink" /><input required name="lastName" autoComplete="family-name" placeholder="Last name" maxLength={80} className="w-full border border-stone-300 px-3 py-3 text-sm outline-none focus:border-ink" /></div>}<input required type="email" name="email" autoComplete="email" placeholder="Email address" maxLength={254} className="w-full border border-stone-300 px-3 py-3 text-sm outline-none focus:border-ink" /><input required type="password" name="password" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} placeholder="Password" minLength={authMode === 'register' ? 12 : undefined} maxLength={72} className="w-full border border-stone-300 px-3 py-3 text-sm outline-none focus:border-ink" />{authMode === 'register' && <p className="text-[11px] leading-5 text-stone-500">Please use at least 12 characters for your password.</p>}<button disabled={authBusy} className="w-full bg-[#293c35] py-3.5 text-xs uppercase tracking-[.15em] text-white disabled:opacity-60">{authBusy ? 'Please wait…' : authMode === 'login' ? 'Sign in' : 'Create account'}</button></form><p className="mt-5 text-center text-xs text-stone-600">{authMode === 'login' ? 'New here?' : 'Already have an account?'} <button onClick={() => { setAuthMessage(''); setAuthMode(authMode === 'login' ? 'register' : 'login') }} className="underline underline-offset-4">{authMode === 'login' ? 'Create an account' : 'Sign in'}</button></p></>}</section></div>}
 
       {bagOpen && <div className="fixed inset-0 z-[70] bg-black/40" onMouseDown={(event) => { if (event.target === event.currentTarget) setBagOpen(false) }}><aside role="dialog" aria-modal="true" aria-labelledby="bag-title" className="absolute bottom-0 right-0 top-0 flex w-full max-w-md flex-col bg-[#fffdfa] shadow-xl"><div className="flex items-center justify-between border-b border-stone-200 px-6 py-5"><div><p className="text-[9px] uppercase tracking-[.18em] text-[#a45f50]">Your edit</p><h2 id="bag-title" className="mt-1 font-display text-2xl">Your bag ({itemCount})</h2></div><button onClick={() => setBagOpen(false)} aria-label="Close bag" className="p-2"><X size={20} /></button></div><div className="flex-1 overflow-y-auto px-6 py-5">{basketError && <p role="alert" className="mb-4 bg-[#fbf1ee] p-3 text-xs text-[#8c443b]">{basketError}</p>}{basketLoading && <p className="mb-4 text-xs text-stone-500">Updating your bag…</p>}{basket.items.length ? <ul className="space-y-5">{basket.items.map((item, index) => <li key={item.variantId} className="flex gap-4 border-b border-stone-200 pb-5"><img src={imageUrl(item.imageUrl, index)} alt="" className="h-24 w-20 bg-[#eee9df] object-cover" /><div className="flex min-w-0 flex-1 flex-col"><p className="text-[9px] uppercase tracking-[.14em] text-stone-500">{item.brand}</p><h3 className="mt-1 text-sm">{item.name}</h3>{item.optionValue && <p className="mt-1 text-xs text-stone-500">{item.optionName}: {item.optionValue}</p>}<div className="mt-auto flex items-end justify-between pt-3"><span className="text-xs">Qty {item.quantity} · {money(item.priceMinor)}</span><button onClick={() => void removeFromBag(item.variantId)} className="text-[9px] uppercase tracking-widest underline underline-offset-4">Remove</button></div></div></li>)}</ul> : !basketLoading && <div className="py-16 text-center"><ShoppingBag size={26} className="mx-auto text-stone-400" strokeWidth={1.3} /><p className="mt-4 font-display text-xl">Your bag is taking a breather</p><p className="mt-2 text-sm text-stone-500">Add something lovely to get started.</p></div>}</div><div className="border-t border-stone-200 px-6 py-5"><div className="flex justify-between text-sm"><span>Subtotal</span><span>{money(basket.subtotalMinor)}</span></div><p className="mt-2 text-[11px] text-stone-500">Shipping and checkout will be available in a later update.</p><button disabled className="mt-5 w-full bg-[#293c35] py-4 text-[10px] uppercase tracking-[.17em] text-white opacity-50">Checkout coming soon</button></div></aside></div>}
       {notice && <div role="status" className={`fixed bottom-5 left-1/2 z-[90] -translate-x-1/2 px-5 py-3 text-xs text-white shadow-xl ${noticeError ? 'bg-[#8c443b]' : 'bg-[#293c35]'}`}>{notice}</div>}
