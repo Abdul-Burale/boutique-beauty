@@ -4,9 +4,10 @@ import { ArrowLeft, ImagePlus, PackagePlus, RefreshCw, Search, X } from 'lucide-
 import { api, type AdminOrder, type AdminProduct, type Category } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import ProductPhoto from './ProductPhoto'
+import AdminContentManager from './AdminContentManager'
 
 type Props = { categories: Category[]; onExit: () => void }
-type Tab = 'products' | 'orders'
+type Tab = 'products' | 'orders' | 'content'
 type ProductDraft = { brand: string; name: string; slug: string; description: string; ingredients: string; imageUrl: string; tag: string; categoryId: string; price: string; sku: string; optionName: string; optionValue: string; stock: string }
 type ProductGroup = { product: AdminProduct; variants: AdminProduct[] }
 const emptyDraft = (): ProductDraft => ({ brand: '', name: '', slug: '', description: '', ingredients: '', imageUrl: '', tag: '', categoryId: '', price: '', sku: '', optionName: '', optionValue: '', stock: '' })
@@ -46,12 +47,12 @@ export default function AdminDashboard({ categories, onExit }: Props) {
         setProducts(page.items)
         setProductTotal(page.total)
         setStockDrafts(Object.fromEntries(page.items.filter((p) => p.variantId != null && p.stock != null).map((p) => [p.variantId!, String(p.stock)])))
-      } else setOrders(await api.adminOrders())
+      } else if (tab === 'orders') setOrders(await api.adminOrders())
     } catch (requestError) { setError((requestError as Error).message) }
     finally { setLoading(false) }
   }
 
-  useEffect(() => { void load() }, [tab, productPage])
+  useEffect(() => { if (tab !== 'content') void load() }, [tab, productPage])
 
   const productGroups = useMemo(() => {
     const groups = new Map<number, ProductGroup>()
@@ -100,7 +101,8 @@ export default function AdminDashboard({ categories, onExit }: Props) {
         setImageUploadState('uploaded')
       }
       const name = draft.name.trim()
-      const product = { brand: draft.brand.trim(), name, slug: draft.slug.trim() || slugify(name), description: draft.description.trim(), ingredients: draft.ingredients.trim(), imageUrl, tag: draft.tag.trim(), categoryId: draft.categoryId ? Number(draft.categoryId) : null }
+      const ingredients = draft.ingredients.trim()
+      const product = { brand: draft.brand.trim(), name, slug: draft.slug.trim() || slugify(name), description: draft.description.trim(), ...(editing || ingredients ? { ingredients } : {}), imageUrl, tag: draft.tag.trim(), categoryId: draft.categoryId ? Number(draft.categoryId) : null }
       if (editing) {
         await api.updateAdminProduct(editing.id, product)
         setMessage(`${name} updated.`)
@@ -170,11 +172,11 @@ export default function AdminDashboard({ categories, onExit }: Props) {
   return (
     <main className="mx-auto min-h-[70vh] max-w-[1440px] px-4 py-8 sm:px-8 lg:px-12">
       <button onClick={onExit} className="mb-6 inline-flex items-center gap-2 text-[10px] uppercase tracking-[.15em] text-stone-600 hover:text-ink"><ArrowLeft size={15} /> Back to shop</button>
-      <div className="flex flex-col justify-between gap-5 border-b border-stone-200 pb-6 sm:flex-row sm:items-end"><div><p className="mb-2 text-[10px] uppercase tracking-[.2em] text-[#a45f50]">Boutique Beauty Retail</p><h1 className="font-display text-4xl">Admin studio</h1><p className="mt-2 text-sm text-stone-500">Manage your catalogue and review incoming orders.</p></div><button onClick={() => void load()} disabled={loading} className="inline-flex items-center justify-center gap-2 border border-stone-300 px-4 py-3 text-[10px] uppercase tracking-[.14em] disabled:opacity-50"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh</button></div>
-      <div className="mt-6 flex gap-2 border-b border-stone-200"><button onClick={() => setTab('products')} className={`border-b-2 px-4 py-3 text-[10px] uppercase tracking-[.15em] ${tab === 'products' ? 'border-[#293c35] text-ink' : 'border-transparent text-stone-500'}`}>Products</button><button onClick={() => setTab('orders')} className={`border-b-2 px-4 py-3 text-[10px] uppercase tracking-[.15em] ${tab === 'orders' ? 'border-[#293c35] text-ink' : 'border-transparent text-stone-500'}`}>Orders</button></div>
+      <div className="flex flex-col justify-between gap-5 border-b border-stone-200 pb-6 sm:flex-row sm:items-end"><div><p className="mb-2 text-[10px] uppercase tracking-[.2em] text-[#a45f50]">Boutique Beauty Retail</p><h1 className="font-display text-4xl">Admin studio</h1><p className="mt-2 text-sm text-stone-500">Manage products, orders, pages and footer details.</p></div>{tab !== 'content' && <button onClick={() => void load()} disabled={loading} className="inline-flex items-center justify-center gap-2 border border-stone-300 px-4 py-3 text-[10px] uppercase tracking-[.14em] disabled:opacity-50"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh</button>}</div>
+      <div className="mt-6 flex gap-2 overflow-x-auto border-b border-stone-200"><button onClick={() => setTab('products')} className={`shrink-0 border-b-2 px-4 py-3 text-[10px] uppercase tracking-[.15em] ${tab === 'products' ? 'border-[#293c35] text-ink' : 'border-transparent text-stone-500'}`}>Products</button><button onClick={() => setTab('orders')} className={`shrink-0 border-b-2 px-4 py-3 text-[10px] uppercase tracking-[.15em] ${tab === 'orders' ? 'border-[#293c35] text-ink' : 'border-transparent text-stone-500'}`}>Orders</button><button onClick={() => { setError(''); setMessage(''); setTab('content') }} className={`shrink-0 border-b-2 px-4 py-3 text-[10px] uppercase tracking-[.15em] ${tab === 'content' ? 'border-[#293c35] text-ink' : 'border-transparent text-stone-500'}`}>Pages &amp; footer</button></div>
       {error && <p role="alert" className="mt-5 border border-[#d9aaa0] bg-[#fbf1ee] px-4 py-3 text-sm text-[#8c443b]">{error}</p>}{message && <p role="status" className="mt-5 border border-[#b8c8be] bg-[#edf4ef] px-4 py-3 text-sm text-[#355444]">{message}</p>}
 
-      {tab === 'products' ? <div className="grid gap-8 py-7 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,.65fr)]">
+      {tab === 'content' ? <AdminContentManager /> : tab === 'products' ? <div className="grid gap-8 py-7 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,.65fr)]">
         <section className="min-w-0"><div className="mb-4 flex flex-wrap items-end justify-between gap-4"><div><p className="text-[9px] uppercase tracking-[.18em] text-stone-500">Catalogue</p><h2 className="mt-1 font-display text-2xl">Products <span className="font-sans text-sm text-stone-500">({productTotal})</span></h2></div><button type="button" onClick={startCreate} className="inline-flex items-center gap-2 bg-[#293c35] px-4 py-3 text-[10px] uppercase tracking-[.14em] text-white"><PackagePlus size={15} /> New product</button></div>
           <p className="mb-3 text-xs text-stone-500">Search and category filters apply to this page ({products.length} variant rows), not the full catalogue.</p>
           <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_210px]"><label className="flex items-center gap-2 border border-stone-300 px-3"><Search size={16} className="shrink-0 text-stone-500" /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, brand, SKU or slug" className="min-w-0 flex-1 bg-transparent py-3 text-sm outline-none" />{search && <button aria-label="Clear search" onClick={() => setSearch('')}><X size={15} /></button>}</label><select aria-label="Filter by category" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className={field}><option value="">All categories</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></div>
@@ -193,7 +195,7 @@ export default function AdminDashboard({ categories, onExit }: Props) {
             <label className="block"><FieldLabel>Category</FieldLabel><select name="categoryId" value={draft.categoryId} onChange={(e) => updateDraft('categoryId', e.target.value)} className={field}><option value="">No category</option>{categories.map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label>
             <label className="block"><FieldLabel>Product label</FieldLabel><input name="tag" maxLength={40} value={draft.tag} onChange={(e) => updateDraft('tag', e.target.value)} placeholder="For example, NEW" className={field} /></label>
             <label className="block"><FieldLabel>Description</FieldLabel><textarea name="description" maxLength={4000} rows={3} value={draft.description} onChange={(e) => updateDraft('description', e.target.value)} className={field} /></label>
-            <label className="block"><FieldLabel>Ingredients</FieldLabel><textarea name="ingredients" maxLength={4000} rows={2} value={draft.ingredients} onChange={(e) => updateDraft('ingredients', e.target.value)} className={field} /></label>
+            <label className="block"><FieldLabel>Ingredients (optional)</FieldLabel><textarea name="ingredients" maxLength={4000} rows={2} value={draft.ingredients} onChange={(e) => updateDraft('ingredients', e.target.value)} className={field} /></label>
             <div className="rounded border border-[#cbd8ce] bg-white/70 p-3">
               <label className="block text-xs text-stone-600"><span className="mb-2 flex items-center gap-2"><ImagePlus size={15} /> Product image (JPEG, PNG, WebP or AVIF)</span><input type="file" accept="image/jpeg,image/png,image/webp,image/avif" disabled={imageUploadState === 'uploading' || busyId === -1} onChange={(event) => { const file = event.target.files?.[0] ?? null; const supported = ['image/jpeg', 'image/png', 'image/webp', 'image/avif']; if (file && !supported.includes(file.type)) { setError('Choose a JPEG, PNG, WebP or AVIF image.'); setImageFile(null); setImageUploadState('failed') } else { setError(''); setImageFile(file); setImageUploadState(file ? 'selected' : 'idle') } }} className="block w-full text-xs file:mr-3 file:border file:border-stone-300 file:bg-white file:px-3 file:py-2" /></label>
               {imageFile && <p className="mt-2 text-xs text-stone-500">Selected: {imageFile.name}. It uploads when you save the product.</p>}{imageUploadState === 'uploading' && <p role="status" className="mt-2 text-xs text-[#725046]">Uploading image to Supabase Storage…</p>}{imageUploadState === 'uploaded' && <p role="status" className="mt-2 text-xs text-[#355444]">Image uploaded. Product image URL: {draft.imageUrl ? 'saved on the product' : 'pending save'}.</p>}{imageUploadState === 'failed' && <p role="alert" className="mt-2 text-xs text-[#8c443b]">Image upload failed. See the error above, then choose the file again to retry.</p>}

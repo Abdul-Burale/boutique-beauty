@@ -24,8 +24,8 @@ export default function AccountAccessPage({ mode, onModeChange, message, message
       <form onSubmit={onSubmit} className="mt-6 space-y-4">
         {mode === 'register' && <div className="grid grid-cols-2 gap-3"><input required name="firstName" autoComplete="given-name" placeholder="First name" maxLength={80} className={input}/><input required name="lastName" autoComplete="family-name" placeholder="Last name" maxLength={80} className={input}/></div>}
         <input required type="email" name="email" autoComplete="email" placeholder="Email address" maxLength={254} className={input}/>
-        <input required type="password" name="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} placeholder="Password" minLength={mode === 'register' ? 12 : undefined} maxLength={72} className={input}/>
-        {mode === 'register' && <p className="text-[11px] leading-5 text-stone-500">Please use at least 12 characters for your password.</p>}
+        <input required type="password" name="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} placeholder="Password" minLength={mode === 'register' ? 8 : undefined} maxLength={72} className={input}/>
+        {mode === 'register' && <p className="text-[11px] leading-5 text-stone-500">Please use at least 8 characters for your password.</p>}
         <button disabled={busy} className="w-full bg-[#293c35] py-3.5 text-xs uppercase tracking-[.15em] text-white disabled:opacity-60">{busy ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}</button>
       </form>
       <p className="mt-5 text-center text-xs text-stone-600">{mode === 'login' ? 'New here?' : 'Already have an account?'} <button onClick={() => onModeChange(mode === 'login' ? 'register' : 'login')} className="underline underline-offset-4">{mode === 'login' ? 'Create an account' : 'Sign in'}</button></p>

@@ -18,7 +18,15 @@ export type Product = {
   stock: number
   optionName?: string
   optionValue?: string
+  description?: string | null
+  ingredients?: string | null
 }
+export type ProductDetail = Product
+export type ProductDetailResponse = { product: ProductDetail; variants: ProductDetail[] }
+export type ContentPage = { id: number; title: string; slug: string; eyebrow: string | null; body: string; published: boolean; footerGroup: string | null; displayOrder: number; createdAt: string; updatedAt: string }
+export type ContentPageWrite = Omit<ContentPage, 'id' | 'createdAt' | 'updatedAt'>
+export type FooterHelpLink = { label: string; url: string; displayOrder: number }
+export type StorefrontContent = { websiteUrl: string | null; customerEmail: string | null; postalAddress: string | null; footerHelpLinks: FooterHelpLink[] }
 export type ProductPage = { items: Product[]; total: number; page: number; pages: number; size: number }
 export type BasketLine = {
   variantId: number
@@ -44,7 +52,7 @@ export type AdminProduct = {
 export type AdminProductPage = { items: AdminProduct[]; page: number; size: number; total: number }
 export type AdminVariantWrite = { sku: string; optionName: string; optionValue: string; priceMinor: number; stock: number }
 export type AdminOrder = { id: number; customerId: number; email: string; status: string; subtotalMinor: number; currency: string; createdAt: string }
-export type AdminProductWrite = { brand: string; name: string; slug: string; description: string; ingredients: string; imageUrl: string; tag: string; categoryId: number | null }
+export type AdminProductWrite = { brand: string; name: string; slug: string; description: string; ingredients?: string; imageUrl: string; tag: string; categoryId: number | null }
 export type ProductImageUploadAuthorization = { bucket: string; path: string; contentType: string; signedUrl: string; token: string; publicUrl: string; expiresInSeconds: number }
 
 async function request<T>(path: string, init: RequestInit = {}, authenticated = false): Promise<T> {
@@ -80,6 +88,10 @@ async function request<T>(path: string, init: RequestInit = {}, authenticated = 
 
 export const api = {
   categories: () => request<Category[]>('/catalog/categories'),
+  contentPages: () => request<ContentPage[]>('/content/pages'),
+  contentPage: (slug: string) => request<ContentPage>(`/content/pages/${encodeURIComponent(slug)}`),
+  storefrontContent: () => request<StorefrontContent>('/content/storefront'),
+  product: (slug: string) => request<ProductDetailResponse>(`/catalog/products/${encodeURIComponent(slug)}`),
   products: (params: { page: number; size: number; q: string; category: string; sort: string }, signal?: AbortSignal) => {
     const query = new URLSearchParams({ page: String(params.page), size: String(params.size), sort: params.sort })
     if (params.q) query.set('q', params.q)
@@ -95,7 +107,12 @@ export const api = {
   putBasketLine: (variantId: number, quantity: number) => request<Basket>('/basket/lines', { method: 'PUT', body: JSON.stringify({ variantId, quantity }) }, true),
   removeBasketLine: (variantId: number) => request<Basket>(`/basket/lines/${variantId}`, { method: 'DELETE' }, true),
   adminProducts: (page = 0, size = 50) => request<AdminProductPage>(`/admin/products?page=${page}&size=${size}`, {}, true),
-  createAdminProduct: (body: { brand: string; name: string; slug: string; description: string; ingredients: string; imageUrl: string; tag: string; categoryId: number | null; priceMinor: number; sku: string; optionName: string; optionValue: string; stock: number }) => request<{ id: number; variantId: number }>('/admin/products', { method: 'POST', body: JSON.stringify(body) }, true),
+  adminContentPages: () => request<ContentPage[]>('/admin/content/pages', {}, true),
+  createContentPage: (body: ContentPageWrite) => request<ContentPage>('/admin/content/pages', { method: 'POST', body: JSON.stringify(body) }, true),
+  updateContentPage: (id: number, body: ContentPageWrite) => request<ContentPage>(`/admin/content/pages/${id}`, { method: 'PUT', body: JSON.stringify(body) }, true),
+  deleteContentPage: (id: number) => request<void>(`/admin/content/pages/${id}`, { method: 'DELETE' }, true),
+  updateStorefrontContent: (body: { websiteUrl: string; customerEmail: string; postalAddress: string; footerHelpLinks: FooterHelpLink[] }) => request<StorefrontContent>('/admin/content/storefront', { method: 'PUT', body: JSON.stringify(body) }, true),
+  createAdminProduct: (body: { brand: string; name: string; slug: string; description: string; ingredients?: string; imageUrl: string; tag: string; categoryId: number | null; priceMinor: number; sku: string; optionName: string; optionValue: string; stock: number }) => request<{ id: number; variantId: number }>('/admin/products', { method: 'POST', body: JSON.stringify(body) }, true),
   updateAdminProduct: (id: number, body: AdminProductWrite) => request<{ id: number; updated: boolean }>(`/admin/products/${id}`, { method: 'PUT', body: JSON.stringify(body) }, true),
   addAdminVariant: (id: number, body: AdminVariantWrite) => request<{ variantId: number }>(`/admin/products/${id}/variants`, { method: 'POST', body: JSON.stringify(body) }, true),
   updateAdminVariant: (productId: number, variantId: number, body: Omit<AdminVariantWrite, 'stock'>) => request<{ variantId: number; sku: string; optionName: string; optionValue: string; priceMinor: number }>(`/admin/products/${productId}/variants/${variantId}`, { method: 'PUT', body: JSON.stringify(body) }, true),
